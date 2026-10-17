@@ -117,13 +117,23 @@ final class Model: ObservableObject {
 
     func trash(_ n: Node) {
         guard !n.isAggregate, let parent = n.parent else { return }
+        let path = n.path
         let alert = NSAlert()
         alert.messageText = "Move “\(n.name)” to the Trash?"
-        alert.informativeText = "\(formatBytes(n.size)) will be moved to the Trash. You can restore it from there."
+        alert.informativeText = "\(path)\n\n\(formatBytes(n.size)) will be moved to the Trash. You can restore it from there."
         alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // The tree is a snapshot: make sure the path still names the same kind of item, and not a symlink.
+        guard Self.stillMatches(n, at: path) else {
+            let changed = NSAlert()
+            changed.messageText = "This item changed since the scan — rescan and try again."
+            changed.informativeText = path
+            changed.alertStyle = .warning
+            changed.runModal()
+            return
+        }
         do {
             try FileManager.default.trashItem(at: n.url, resultingItemURL: nil)
         } catch {
@@ -136,5 +146,14 @@ final class Model: ObservableObject {
         while let c = a { c.size -= removed; c.itemCount -= removedItems; a = c.parent }
         selected = nil; hovered = nil
         relayout()
+    }
+
+    /// True if `path` still exists, is not a symlink, and is a folder/file exactly when the node is.
+    private static func stillMatches(_ n: Node, at path: String) -> Bool {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return false }
+        let type = st.st_mode & S_IFMT
+        if type == S_IFLNK { return false }
+        return n.isDir ? type == S_IFDIR : type == S_IFREG
     }
 }

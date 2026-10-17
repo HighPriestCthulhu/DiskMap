@@ -7,7 +7,12 @@ final class ScanProgress: @unchecked Sendable {
     private var _items = 0
     private var _bytes: Int64 = 0
     private var _current = ""
-    var cancelled = false
+    private var _cancelled = false
+
+    var cancelled: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _cancelled }
+        set { lock.lock(); _cancelled = newValue; lock.unlock() }
+    }
 
     func add(items: Int, bytes: Int64, current: String) {
         lock.lock(); _items += items; _bytes += bytes; _current = current; lock.unlock()
@@ -58,7 +63,7 @@ final class DiskScanner: @unchecked Sendable {
     private func scanOne(_ path: String, _ node: Node) {
         // Cloud-provider mounts (Google Drive, OneDrive, …) are network-backed: slow, and not local disk use.
         if path.hasSuffix("/Library/CloudStorage") { return }
-        let fd = open(path, O_RDONLY | O_DIRECTORY)
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         guard fd >= 0 else { return }
         defer { close(fd) }
 
@@ -79,33 +84,49 @@ final class DiskScanner: @unchecked Sendable {
         while !progress.cancelled {
             let n = getattrlistbulk(fd, &al, buf, bufSize, 0)
             if n <= 0 { break }
+            let end = UnsafeRawPointer(buf) + bufSize
             var p = UnsafeRawPointer(buf)
             for _ in 0..<Int(n) {
                 let entryStart = p
+                guard end - entryStart >= 4 else { break }
                 let length = Int(p.loadUnaligned(as: UInt32.self))
+                // Never trust the kernel-supplied length to stay inside our buffer.
+                guard length >= 4 + MemoryLayout<attribute_set_t>.size, length <= end - entryStart else { break }
+                let entryEnd = entryStart + length
                 var f = p + 4
                 let returned = f.loadUnaligned(as: attribute_set_t.self)
                 f += MemoryLayout<attribute_set_t>.size
 
                 var name = ""
                 if returned.commonattr & attrgroup_t(ATTR_CMN_NAME) != 0 {
+                    guard f + MemoryLayout<attrreference_t>.size <= entryEnd else { break }
                     let ref = f.loadUnaligned(as: attrreference_t.self)
-                    name = String(cString: (f + Int(ref.attr_dataoffset)).assumingMemoryBound(to: CChar.self))
+                    let nameStart = f + Int(ref.attr_dataoffset)
+                    let nameLen = Int(ref.attr_length)
+                    guard nameStart >= f, nameLen >= 0, nameStart + nameLen <= entryEnd else { break }
+                    var raw = UnsafeRawBufferPointer(start: nameStart, count: nameLen)
+                    if raw.last == 0 { raw = UnsafeRawBufferPointer(rebasing: raw.dropLast()) }
+                    name = String(decoding: raw, as: UTF8.self)
                     f += MemoryLayout<attrreference_t>.size
                 }
                 var entryDev: UInt32 = UInt32(bitPattern: Int32(dev))
                 if returned.commonattr & attrgroup_t(ATTR_CMN_DEVID) != 0 {
+                    guard f + 4 <= entryEnd else { break }
                     entryDev = f.loadUnaligned(as: UInt32.self); f += 4
                 }
                 var objType: UInt32 = 0
                 if returned.commonattr & attrgroup_t(ATTR_CMN_OBJTYPE) != 0 {
+                    guard f + 4 <= entryEnd else { break }
                     objType = f.loadUnaligned(as: UInt32.self); f += 4
                 }
                 var alloc: Int64 = 0
                 if returned.fileattr & attrgroup_t(ATTR_FILE_ALLOCSIZE) != 0 {
+                    guard f + 8 <= entryEnd else { break }
                     alloc = f.loadUnaligned(as: Int64.self); f += 8
                 }
-                p = entryStart + length
+                p = entryEnd
+                // An empty or slash-containing name would build a bogus (or self-referencing) child path.
+                if name.isEmpty || name == "." || name == ".." || name.contains("/") { continue }
 
                 if objType == 2 {                                   // VDIR
                     if entryDev == UInt32(bitPattern: Int32(dev)) { // stay on one volume
