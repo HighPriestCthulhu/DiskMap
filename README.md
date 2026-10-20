@@ -6,6 +6,24 @@ sized by how much space it takes up and coloured by file type.
 
 ![DiskMap showing a scanned folder as a nested treemap](docs/screenshots/treemap-overview.png)
 
+## Download
+
+**[Download DiskMap for Mac](https://github.com/HighPriestCthulhu/DiskMap/releases/latest/download/DiskMap-macOS.zip)**
+(about 110 KB, universal: Apple silicon and Intel, macOS 13 or later). No installer:
+unzip it and open `DiskMap.app`, from anywhere. Drag it to Applications if you
+want to keep it.
+
+The app isn't notarised by Apple, so the first time you open it macOS will say it
+can't check it for malicious software:
+
+- **macOS 15 Sequoia and later:** click *Done*, then open System Settings →
+  Privacy & Security, scroll down and click **Open Anyway** next to the DiskMap
+  message, and confirm.
+- **macOS 13–14:** right-click (or Control-click) `DiskMap.app`, choose **Open**,
+  then click **Open** again.
+
+You only need to do this once.
+
 ## What it's for
 
 When your disk is filling up and you don't know why. One scan shows where the
@@ -47,6 +65,14 @@ destructive action, and it asks first, so anything removed can be restored.
 
 This builds a release binary and wraps it in an ad-hoc signed `DiskMap.app` next
 to the script. You can also run it directly with `swift run`.
+
+To make the downloadable release (universal binary, size-optimised, zipped into
+`dist/DiskMap-macOS.zip`):
+
+```sh
+./make_release.sh 1.0
+gh release create v1.0 dist/DiskMap-macOS.zip --title "DiskMap 1.0"
+```
 
 For complete results when scanning the whole disk, grant the app Full Disk Access
 in System Settings → Privacy & Security. The app is only ad-hoc signed, so macOS
